@@ -1,0 +1,53 @@
+--- Levantar red externa
+if (-not (docker network ls --format '{{.Name}}' | Select-String -Quiet 'analytics-net')) {
+    docker network create analytics-net
+}
+
+--- Levanta el stack
+docker compose --env-file .env.etl -f docker-compose.etl.yml up -d
+
+---- Validar
+docker ps
+docker logs -f postgres-dw
+docker logs -f redis-cache
+
+
+
+--		CONECTAR A OTRO SERVICIOS
+
+-- Al compose poner
+networks:
+  analytics-net:
+    external: true
+
+
+-- Variables de entorno
+DATA_SOURCE=DW
+DW_HOST=postgres-dw
+DW_PORT=5432
+DW_DB=BALONCESTO_DW
+DW_USER=dw_report
+DW_PASSWORD=dw_report_2025!
+REDIS_HOST=redis-cache
+REDIS_PORT=6379
+
+
+--		PRUEBAS
+psql "host=localhost port=5433 dbname=BALONCESTO_DW user=dw_admin password=dw_admin_2025!"
+\dt dw.*
+SELECT * FROM dw.dim_tiempo LIMIT 5;
+
+-- REDIS_HOST
+docker exec -it redis-cache redis-cli
+SET test:key "hola"
+GET test:key
+
+-- Contruir imagen ETL
+docker compose --env-file ../.env.etl -f ../docker-compose.etl.yml build etl
+
+-- Ejecución incremental el watermark
+docker compose --env-file ../.env.etl -f ../docker-compose.etl.yml run --rm etl
+
+-- Ejecución por rango manual
+docker compose --env-file ../.env.etl -f ../docker-compose.etl.yml run --rm etl \
+  python etl_run.py --desde 2025-10-01 --hasta 2025-10-29

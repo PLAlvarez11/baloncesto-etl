@@ -1,0 +1,102 @@
+version: "3.9"
+
+name: etl-stack
+
+services:
+  postgres-dw:
+    image: postgres:16-alpine
+    container_name: postgres-dw
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DW_DB}
+      POSTGRES_USER: ${POSTGRES_DW_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_DW_PASSWORD}
+    ports:
+      - "${POSTGRES_DW_PORT}:5432"   # Host:5433 -> Container:5432
+    volumes:
+      - pg_dw_data:/var/lib/postgresql/data
+      - ./sql/init_dw.sql:/docker-entrypoint-initdb.d/00_init_dw.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_DW_USER} -d ${POSTGRES_DW_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - analytics-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis-cache
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "${REDIS_PORT}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - analytics-net
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+    ports:
+      - "${PGADMIN_PORT}:80"
+    depends_on:
+      - postgres-dw
+    networks:
+      - analytics-net
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: redis-commander
+    restart: unless-stopped
+    environment:
+      - REDIS_HOSTS=local:redis-cache:6379
+    ports:
+      - "${REDIS_COMMANDER_PORT}:8081"
+    depends_on:
+      - redis
+    networks:
+      - analytics-net
+
+volumes:
+  pg_dw_data:
+
+networks:
+  analytics-net:
+    external: true
+
+  etl:
+    build:
+      context: ./etl
+      dockerfile: Dockerfile
+    container_name: etl-runner
+    restart: "no"            
+    environment:
+      - MSSQL_HOST=${MSSQL_HOST}
+      - MSSQL_PORT=${MSSQL_PORT}
+      - MSSQL_DB=${MSSQL_DB}
+      - MSSQL_USER=${MSSQL_USER}
+      - MSSQL_PASSWORD=${MSSQL_PASSWORD}
+      - MSSQL_ODBC_DRIVER=${MSSQL_ODBC_DRIVER}
+      - DW_HOST=${DW_HOST}
+      - DW_PORT=${DW_PORT}
+      - DW_DB=${DW_DB}
+      - DW_USER=${DW_USER}
+      - DW_PASSWORD=${DW_PASSWORD}
+      - ETL_MODE=${ETL_MODE}
+      - ETL_DEFAULT_LOOKBACK_DAYS=${ETL_DEFAULT_LOOKBACK_DAYS}
+      - SOURCE_SCHEMA=${SOURCE_SCHEMA}
+      - PYTHONUNBUFFERED=${PYTHONUNBUFFERED}
+    depends_on:
+      - postgres-dw
+      - redis
+    networks:
+      - analytics-net
