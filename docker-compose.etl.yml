@@ -100,3 +100,30 @@ networks:
       - redis
     networks:
       - analytics-net
+
+  replicator:
+    build:
+      context: ./replication/replicator
+      dockerfile: Dockerfile
+    container_name: etl-replicator
+    restart: unless-stopped
+    environment:
+      - REPL_BATCH_SECONDS=${REPL_BATCH_SECONDS}
+      - REPL_LOG_LEVEL=${REPL_LOG_LEVEL}
+      - MSSQL_HOST=${MSSQL_HOST}
+      - MSSQL_PORT=${MSSQL_PORT}
+      - MSSQL_DB=${MSSQL_DB}
+      - MSSQL_USER=${MSSQL_USER}
+      - MSSQL_PASSWORD=${MSSQL_PASSWORD}
+      - MSSQL_ODBC_DRIVER=${MSSQL_ODBC_DRIVER}
+      - DW_HOST=${DW_HOST}
+      - DW_PORT=${DW_PORT}
+      - DW_DB=${DW_DB}
+      - DW_USER=${DW_USER}
+      - DW_PASSWORD=${DW_PASSWORD}
+      - REPL_TABLES=${REPL_TABLES}
+    depends_on:
+      - postgres-dw
+      - redis
+    networks:
+      - analytics-net

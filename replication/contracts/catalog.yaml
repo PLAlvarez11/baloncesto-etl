@@ -1,0 +1,129 @@
+version: 1
+source_system: Back-Tablero
+source_db: Tablero_DB
+target_system: DW-Postgres
+target_db: BALONCESTO_DW
+last_updated: 2025-11-02
+
+tables:
+  dbo.Localidades:
+    nk: [id_Localidad]
+    audit_columns:
+      created_at: FechaCrea
+      updated_at: FechaActualiza
+    replicate_ops: [INSERT, UPDATE]
+    target_dim: dw.dim_localidad
+    mapping:
+      id_Localidad: nk_localidad_id
+      Nombre: nombre
+    notes: "Cargar antes que Equipos y Partidos."
+  
+  dbo.Equipos:
+    nk: [id_Equipo]
+    audit_columns:
+      created_at: FechaCrea
+      updated_at: FechaActualiza
+    replicate_ops: [INSERT, UPDATE]
+    target_dim: dw.dim_equipo
+    mapping:
+      id_Equipo: nk_equipo_id
+      Nombre: nombre
+      Ciudad: ciudad
+    notes: "Dimensión clave para ‘fact_*’."
+
+  dbo.Jugadores:
+    nk: [id_Jugador]
+    audit_columns:
+      created_at: FechaCrea
+      updated_at: FechaActualiza
+    replicate_ops: [INSERT, UPDATE]
+    target_dim: dw.dim_jugador
+    mapping:
+      id_Jugador: nk_jugador_id
+      Nombre: nombre
+      Apellido: apellido
+      Numero_jugador: numero
+      edad: edad
+      altura: estatura_cm
+      nacionalidad: nacionalidad
+      id_Equipo: (join) → dim_equipo.nombre AS equipo_actual
+    notes: "Type-1 (sobrescribir atributos)."
+
+  dbo.Partidos:
+    nk: [id_Partido]
+    audit_columns:
+      created_at: FechaCrea
+      updated_at: FechaActualiza
+    replicate_ops: [INSERT, UPDATE]
+    target_dim: dw.dim_partido
+    mapping:
+      id_Partido: nk_partido_id
+      FechaHora: fecha_hora
+      id_Local: (join) → dim_equipo.nombre AS equipo_local
+      id_Visitante: (join) → dim_equipo.nombre AS equipo_visita
+      id_Localidad: (join) → dim_localidad.nombre AS localidad
+    notes: "Requiere dim_equipo y dim_localidad cargadas."
+
+  dbo.Cuartos:
+    nk: [id_partido, id_cuarto, id_equipo]
+    audit_columns:
+      created_at: FechaCrea
+      updated_at: FechaActualiza
+    replicate_ops: [INSERT, UPDATE]
+    target_dim: (no aplica)   
+    mapping:
+      nro_cuarto: cuarto
+    notes: "Apoyo para hechos (resuelve cuarto/equipo)."
+
+  dbo.Anotacion:
+    nk: [id] 
+    audit_columns:
+      created_at: FechaCrea
+      updated_at: FechaActualiza
+    replicate_ops: [INSERT, UPDATE]
+    target_fact: dw.fact_anotacion
+    mapping:
+      id_partido: nk_partido_id
+      id_jugador: nk_jugador_id
+      total_anotaciones: puntos
+      id_cuarto: (join) → Cuartos.nro_cuarto AS cuarto
+      ts_evento: (derivado) → Partidos.FechaHora si no existe
+      tipo_tiro: null
+    notes: "Insert-only en fact; updates → upsert según NK."
+
+  dbo.Falta:
+    nk: [id]
+    audit_columns:
+      created_at: FechaCrea
+      updated_at: FechaActualiza
+    replicate_ops: [INSERT, UPDATE]
+    target_fact: dw.fact_falta
+    mapping:
+      id_partido: nk_partido_id
+      id_jugador: nk_jugador_id
+      total_falta: cantidad
+      id_cuarto: (join) → Cuartos.nro_cuarto AS cuarto
+      ts_evento: (derivado) → Partidos.FechaHora si no existe
+      tipo_falta: null
+    notes: "Insert-only en fact; updates → upsert según NK."
+
+apply_order:
+  dims: [dbo.Localidades, dbo.Equipos, dbo.Jugadores, dbo.Partidos]
+  facts: [dbo.Anotacion, dbo.Falta]
+
+idempotency:
+  watermark: dw.control_etl.last_run_ts
+  nk_strategy:
+    dim_equipo: nk_equipo_id UNIQUE
+    dim_jugador: nk_jugador_id UNIQUE
+    dim_partido: nk_partido_id UNIQUE
+  facts_insert_mode: "INSERT SELECT resolviendo SK por NK; si llega UPDATE, tratar como upsert vía NK→SK"
+
+change_data_capture:
+  preferred: CDC
+  fallback: Outbox or Row-level Triggers
+
+cache_invalidation:
+  rules:
+    - on_etl_run: "borrar keys redis por prefijo pdf:* o versionar namespace"
+    - on_match_close: "invalidar keys de partido afectado"
