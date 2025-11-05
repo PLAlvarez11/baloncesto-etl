@@ -46,7 +46,7 @@ def main():
                     # Aplicar por tabla
                     if tbl == "Localidades":
                         for ch in changes:
-                            if ch.get("__$operation") in (2,4): # update/insert
+                            if ch.get("__$operation") in (2,4): # valida que operacion es
                                 upsert_localidad(pg, ch)
                                 rows_applied += 1
 
