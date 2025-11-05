@@ -127,3 +127,23 @@ networks:
       - redis
     networks:
       - analytics-net
+
+pg-backup:
+    image: postgres:16-alpine
+    container_name: pg-backup
+    restart: unless-stopped
+    environment:
+      - PGPASSWORD=${POSTGRES_DW_PASSWORD}
+    volumes:
+      - ./backups:/backups
+    entrypoint: ["/bin/sh","-c"]
+    command: |
+      while true; do
+        NOW=$(date -u +%F_%H-%M-%S)
+        pg_dump -h postgres-dw -U ${POSTGRES_DW_USER} -d ${POSTGRES_DW_DB} -F c -f /backups/${POSTGRES_DW_DB}_${NOW}.dump || true
+        sleep 86400
+      done
+    depends_on:
+      postgres-dw:
+        condition: service_healthy
+    networks: [analytics-net]
