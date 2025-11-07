@@ -8,6 +8,13 @@ from transform_load import (
   ensure_dim_tiempo, insert_fact_anotacion, insert_fact_falta
 )
 
+from prometheus_client import start_http_server, Counter, Gauge
+
+MET_ROWS_READ  = Counter('etl_rep_rows_read_total',  'Rows read from CDC',    ['table'])
+MET_ROWS_APPL  = Counter('etl_rep_rows_applied_total','Rows applied to DW',    ['table'])
+MET_ERRORS     = Counter('etl_rep_errors_total',      'Errors by table',       ['table'])
+MET_LAG_SEC    = Gauge('etl_replication_lag_seconds', 'Replication lag seconds (CDC max LSN time to now)')
+
 LOG_LEVEL=os.getenv("REPL_LOG_LEVEL","INFO").upper()
 BATCH_SEC=int(os.getenv("REPL_BATCH_SECONDS","15"))
 TABLES=[t.strip() for t in os.getenv("REPL_TABLES","").split(",") if t.strip()]
@@ -16,12 +23,18 @@ def log(msg):
     if LOG_LEVEL in ("INFO","DEBUG"):
         print(f"[{datetime.utcnow().isoformat()}] {msg}", flush=True)
 
+def lsn_to_time(mssql, lsn: bytes):
+    with mssql.connect() as cx:
+        return cx.execute(text("SELECT sys.fn_cdc_map_lsn_to_time(:lsn)"), {"lsn": lsn}).scalar()
+
 def main():
     mssql=mssql_engine()
     pg=pg_engine()
     ensure_repl_tables(pg)
     if not TABLES:
         print("REPL_TABLES vacío", file=sys.stderr); sys.exit(1)
+
+    start_http_server(8000)
 
     dims=[t for t in ["Localidades","Equipos","Jugadores","Partidos","Cuartos"] if t in TABLES]
     facts=[t for t in ["Anotacion","Falta"] if t in TABLES]
@@ -37,7 +50,9 @@ def main():
 
                     changes=read_changes(mssql,tbl,from_lsn,to_lsn)
                     rows_read=len(changes); rows_applied=0
-                    if rows_read: log(f"{tbl}: {rows_read} cambios")
+                    if rows_read:
+                        log(f"{tbl}: {rows_read} cambios")
+                        MET_ROWS_READ.labels(tbl).inc(rows_read)
 
                     if tbl=="Localidades":
                         for ch in changes:
@@ -79,7 +94,7 @@ def main():
                                 rows_applied+=1
 
                     elif tbl=="Cuartos":
-                        pass  # solo apoyo
+                        pass
 
                     elif tbl=="Anotacion":
                         for ch in changes:
@@ -111,13 +126,25 @@ def main():
                                 }
                                 insert_fact_falta(pg,payload); rows_applied+=1
 
+                    MET_ROWS_APPL.labels(tbl).inc(rows_applied)
+
+                    to_time = lsn_to_time(mssql, to_lsn)
+                    if to_time:
+                        from datetime import timezone
+                        import datetime as dt
+                        lag = (dt.datetime.now(tz=timezone.utc) - to_time).total_seconds()
+                        MET_LAG_SEC.set(max(lag, 0))
+
                     upsert_last_lsn(pg,tbl,to_lsn,rows_applied)
                     add_metric(pg,tbl,from_lsn,to_lsn,rows_read,rows_applied,"OK","applied")
 
                 except Exception as e:
+                    MET_ERRORS.labels(tbl).inc()
                     add_metric(pg,tbl,b"",b"",0,0,"ERROR",str(e))
                     print(f"[ERROR] {tbl}: {e}", file=sys.stderr)
+
         time.sleep(BATCH_SEC)
+
 
 if __name__=="__main__":
     main()

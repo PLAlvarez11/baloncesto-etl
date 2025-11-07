@@ -12,7 +12,7 @@ services:
       POSTGRES_USER: ${POSTGRES_DW_USER}
       POSTGRES_PASSWORD: ${POSTGRES_DW_PASSWORD}
     ports:
-      - "${POSTGRES_DW_PORT}:5432"   # Host:5433 -> Container:5432
+      - "${POSTGRES_DW_PORT}:5432"
     volumes:
       - pg_dw_data:/var/lib/postgresql/data
       - ./sql/init_dw.sql:/docker-entrypoint-initdb.d/00_init_dw.sql:ro
@@ -21,6 +21,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     networks:
       - analytics-net
 
@@ -36,6 +41,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     networks:
       - analytics-net
 
@@ -50,6 +60,11 @@ services:
       - "${PGADMIN_PORT}:80"
     depends_on:
       - postgres-dw
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     networks:
       - analytics-net
 
@@ -63,22 +78,20 @@ services:
       - "${REDIS_COMMANDER_PORT}:8081"
     depends_on:
       - redis
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     networks:
       - analytics-net
-
-volumes:
-  pg_dw_data:
-
-networks:
-  analytics-net:
-    external: true
 
   etl:
     build:
       context: ./etl
       dockerfile: Dockerfile
     container_name: etl-runner
-    restart: "no"            
+    restart: "no"
     environment:
       - MSSQL_HOST=${MSSQL_HOST}
       - MSSQL_PORT=${MSSQL_PORT}
@@ -98,6 +111,11 @@ networks:
     depends_on:
       - postgres-dw
       - redis
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     networks:
       - analytics-net
 
@@ -125,10 +143,44 @@ networks:
     depends_on:
       - postgres-dw
       - redis
+    ports:
+      - "8000:8000" # 🔹 expone métricas Prometheus
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     networks:
       - analytics-net
 
-pg-backup:
+  reconciler:
+    build:
+      context: ./reconcile
+      dockerfile: Dockerfile
+    container_name: etl-reconciler
+    restart: unless-stopped
+    environment:
+      - MSSQL_HOST=${MSSQL_HOST}
+      - MSSQL_PORT=${MSSQL_PORT}
+      - MSSQL_DB=${MSSQL_DB}
+      - MSSQL_USER=${MSSQL_USER}
+      - MSSQL_PASSWORD=${MSSQL_PASSWORD}
+      - MSSQL_ODBC_DRIVER=${MSSQL_ODBC_DRIVER}
+      - DW_HOST=${DW_HOST}
+      - DW_PORT=${DW_PORT}
+      - DW_DB=${DW_DB}
+      - DW_USER=${DW_USER}
+      - DW_PASSWORD=${DW_PASSWORD}
+    depends_on:
+      postgres-dw:
+        condition: service_healthy
+    networks: [analytics-net]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+
+  pg-backup:
     image: postgres:16-alpine
     container_name: pg-backup
     restart: unless-stopped
@@ -146,4 +198,17 @@ pg-backup:
     depends_on:
       postgres-dw:
         condition: service_healthy
-    networks: [analytics-net]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    networks:
+      - analytics-net
+
+volumes:
+  pg_dw_data:
+
+networks:
+  analytics-net:
+    external: true
